@@ -15,11 +15,11 @@ from tqdm import tqdm
 # from src.utils import utilities as utils
 from src.utils.SpacySplitter import SpacySplitter
 
-transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
+# transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
 #transformer = SentenceTransformer(model_name_or_path='all-mpnet-base-v2') # 768
 
 
-class KerasModel:
+class KerasModelHandler:
     def __init__(self, model: tf.keras.Model, history: tf.keras.callbacks.History | None, words: list[str], definitions: list[str]):
         self.model = model
         self.history = history
@@ -27,18 +27,31 @@ class KerasModel:
         self.definitions = definitions
 
     def getKerasModel(self) -> tf.keras.Model:
+        r"""Returns the Keras model instance for flexibility in how the model is used after it has been trained and saved.
+        Returns:
+            tf.keras.Model: The Keras model instance.
+         """
         return self.model
 
     def getHistory(self) -> tf.keras.callbacks.History | None:
         return self.history
-    
-    def getPredictions(self, input: str | list[str]) -> tuple[np.ndarray, np.ndarray]:
+
+    def getPredictions(self, input: str | list[str]) -> dict[str, str] | None:
+        r"""Generates predictions.
+        Args:
+            input (str | list[str]): A single definition or a list of definitions to generate predictions for.
+        Returns:
+            dict[str, str] | None: A dictionary containing the predicted word and definition, or None if the model is not available.
+        """
         if isinstance(input, str):
             input = [input]
-        embedding = transformer.encode(sentences=input, convert_to_numpy=True)
-        definition_pred, word_pred = self.model.predict(embedding)
-        predictions = np.argmax(definition_pred, axis=1)[0], np.argmax(word_pred, axis=1)[0]
-        return self.words[predictions[1]], self.definitions[predictions[0]]
+        
+        if self.model is not None:
+            transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
+            embedding = transformer.encode(sentences=input, convert_to_numpy=True)
+            definition_pred, word_pred = self.model.predict(embedding)
+            predictions = np.argmax(definition_pred, axis=1)[0], np.argmax(word_pred, axis=1)[0]
+            return {"Word": self.words[predictions[1]], "Definition": self.definitions[predictions[0]]}
 
 
 class TFLiteModel:
@@ -54,12 +67,15 @@ class WordDefinitionModel:
     EPOCHS: int
     BATCH_SIZE: int
 
+    words: list[str]
+    definitions: list[str]
+
     inputs: np.ndarray
     definition_output_labels: np.ndarray
     word_output_labels: np.ndarray
 
     tfliteModel: TFLiteModel | None = None
-    kerasModel: KerasModel | None = None
+    kerasModelHandler: KerasModelHandler | None = None
     
     spacy_splitter: SpacySplitter = SpacySplitter()
 
@@ -72,27 +88,13 @@ class WordDefinitionModel:
             dict (str): The path to the CSV file containing words and their definitions or a named built-in dictionary. The CSV file should have 'word' and 'definition' columns. If no dictionary is provided, it will load a default dictionary from 'data/dictionaries/dict.csv'.
         """
 
-        print("\n⏳ Initializing model and loading data...\n")
+        print("\n⏳ Initializing Environment...\n")
 
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
             print(f"Available GPUs: {[gpu.name for gpu in gpus]}")        
         else:
             print("No GPUs found. Using CPU.")
-
-        if dict == "default":
-            print("⚠️  Using default dictionary. To use a custom dictionary, provide the path to a CSV file with 'word' and 'definition' columns when initializing the model.")
-            df =pd.read_csv(os.getcwd() + '/data/datasets/default/default.csv')
-        else:
-            print(f"📂 Loading custom dictionary from {dict}...")
-            df = pd.read_csv(dict)
-
-        self.words = df['word'].tolist()
-        self.definitions = df['definition'].tolist()
-        self.word_labels = np.arange(len(self.definitions))
-        self.definition_labels = np.arange(len(self.words))
-
-        print(f"\n🔋 Loaded {len(self.words)} words with definitions.")
 
         self.EPOCHS = epochs
         self.BATCH_SIZE = batch_size
@@ -104,14 +106,21 @@ class WordDefinitionModel:
         self.tflite_model_save_path = os.getcwd() + '/saved_models/word_definition_model.tflite'
 
         self.tfliteModel = None
-        self.kerasModel = None
+        self.kerasModelHandler = None
+
+        # self.dict = dict
+        try:
+            self.getCSVData(dict)
+        except Exception as e:
+            print(f"❌ 'raise' caught during CSV data loading: {e}")
+            return None
 
         os.makedirs(self.checkpoints_path, exist_ok=True)
         os.makedirs(os.getcwd() + '/saved_models', exist_ok=True)
 
         if os.path.exists(self.keras_model_save_path):
             print("\n💽 Loading existing Keras model...\n")
-            self.kerasModel = KerasModel(tf.keras.models.load_model(self.keras_model_save_path), None, self.words, self.definitions)
+            self.kerasModelHandler = KerasModelHandler(tf.keras.models.load_model(self.keras_model_save_path), None, self.words, self.definitions)
 
 
 
@@ -150,7 +159,7 @@ class WordDefinitionModel:
         """
         print(f"💾 Saving model to {self.keras_model_save_path}...")
         model.save(self.keras_model_save_path)
-        self.kerasModel = KerasModel(model, history, self.words, self.definitions)
+        self.kerasModelHandler = KerasModelHandler(model, history, self.words, self.definitions)
 
         print(f"💾 Exporting model to {self.keras_model_export_path} format...")
         model.export(self.keras_model_export_path)
@@ -185,10 +194,39 @@ class WordDefinitionModel:
             yield x_batch, y_batch
 
 
-    async def initializeAndTrainKerasModel(self) -> None:   #tuple[tf.keras.Model, tf.keras.callbacks.History | None] | None:
+    def getCSVData(self, dict_path: str):
+        r"""Loads a CSV file containing words and their definitions into a pandas DataFrame. The CSV file should have 'word' and 'definition' columns.
+        Args:
+            dict_path (str): The path to the CSV file containing the dictionary data.
+        Returns:
+            pd.DataFrame: A DataFrame containing the loaded words and definitions.
+        """
+        try:
+            if dict_path == "default":
+                print("⚠️  Using default dictionary. To use a custom dictionary, provide the path to a CSV file with 'word' and 'definition' columns when initializing the model.")
+                df =pd.read_csv(os.getcwd() + '/data/datasets/default/default.csv')
+            else:
+                print(f"📂 Loading custom dictionary from {dict_path}...")
+                df = pd.read_csv(dict_path)
+                if 'word' not in df.columns or 'definition' not in df.columns:
+                    raise ValueError("CSV file must contain 'word' and 'definition' columns.")
+
+            self.words = df['word'].tolist()
+            self.definitions = df['definition'].tolist()
+            self.word_labels = np.arange(len(self.definitions))
+            self.definition_labels = np.arange(len(self.words))
+
+            print(f"\n🔋 Loaded {len(self.words)} words with definitions.")
+        
+        except Exception as e:
+            print(f"❌ Error loading CSV data: {e}")
+            raise
+
+
+    async def createKerasModel(self) -> None:   #tuple[tf.keras.Model, tf.keras.callbacks.History | None] | None:
         r"""Initializes the Keras model by preparing the training data, defining the model architecture, compiling it, and starting the training process. It also handles saving the trained model and its history for later use."""
         try:
-            if self.kerasModel is None:
+            if self.kerasModelHandler is None:
                 print("\n🥣 Preparing Training Data...\n")
                 
                 AUGMENTED_DEFINITIONS = []
@@ -198,7 +236,8 @@ class WordDefinitionModel:
                 DEFINITION_EMBEDDINGS = []
                 
                 tf.keras.backend.clear_session()
-                
+                transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
+
                 try:
                     ad = self.load_checkpoint("augmented_definitions.pkl")
                     if ad is not None:
@@ -385,3 +424,15 @@ class WordDefinitionModel:
         except Exception as e:
                 print(f"❌ Error during data preparation: {e}")
                 return None
+
+
+    # def getPredictions(self, input: str | list[str]) -> list[str] | None:
+    #     if isinstance(input, str):
+    #         input = [input]
+        
+    #     if self.kerasModel is not None:
+    #         transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
+    #         embedding = transformer.encode(sentences=input, convert_to_numpy=True)
+    #         definition_pred, word_pred = self.kerasModel.model.predict(embedding)
+    #         predictions = np.argmax(definition_pred, axis=1)[0], np.argmax(word_pred, axis=1)[0]
+    #         return [self.words[predictions[1]], self.definitions[predictions[0]]]
