@@ -1,9 +1,6 @@
 
 import os
-os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '1'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-os.environ['TF_XLA_FLAGS'] = '--tf_xla_auto_jit=2 --tf_xla_cpu_global_jit'
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -15,7 +12,7 @@ from sentence_transformers import SentenceTransformer
 from ai_edge_litert.interpreter import Interpreter
 from tqdm import tqdm
 
-from src.utils import utilities as utils
+# from src.utils import utilities as utils
 from src.utils.SpacySplitter import SpacySplitter
 
 transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
@@ -63,12 +60,12 @@ class WordDefinitionModel:
     spacy_splitter: SpacySplitter = SpacySplitter()
 
 
-    def __init__(self, batch_size: int = 32, epochs: int = 10, dict = 'data/dictionaries/dict.csv'):
+    def __init__(self, batch_size: int = 32, epochs: int = 10, dict = 'default'):
         r"""Initializes the WordDefinitionModel by loading the dataset, preparing the training data, and setting up paths for saving models and checkpoints. It also checks for available GPUs and clears any existing TensorFlow sessions to ensure a clean start.
         Args:
             batch_size (int): The number of samples per batch during training. Default is 32.
             epochs (int): The number of epochs to train the model. Default is 10.
-            dict (str): The path to the CSV file containing words and their definitions or a named built-in dictionary. The CSV file should have 'word' and 'definition' columns. If 'default_words' is provided, it will load a default dictionary from 'data/dictionaries/dict.csv'.
+            dict (str): The path to the CSV file containing words and their definitions or a named built-in dictionary. The CSV file should have 'word' and 'definition' columns. If no dictionary is provided, it will load a default dictionary from 'data/dictionaries/dict.csv'.
         """
 
         print("\n⏳ Initializing model and loading data...\n")
@@ -83,10 +80,11 @@ class WordDefinitionModel:
 
         
 
-        if dict == "default_words":
+        if dict == "default":
             print("⚠️  Using default dictionary. To use a custom dictionary, provide the path to a CSV file with 'word' and 'definition' columns when initializing the model.")
-            df =pd.read_csv('data/dictionaries/dict.csv')
+            df =pd.read_csv(os.getcwd() + '/data/datasets/default/default.csv')
         else:
+            print(f"📂 Loading custom dictionary from {dict}...")
             df = pd.read_csv(dict)
 
         self.words = df['word'].tolist()
@@ -100,16 +98,16 @@ class WordDefinitionModel:
         self.batch_size = batch_size
         self.ncols = 150
 
-        self.keras_model_save_path = '../../saved_models/word_definition_model.keras'
-        self.keras_model_export_path = '../../saved_models/SavedModel'
-        self.tflite_model_save_path='../../saved_models/word_definition_model.tflite'
+        self.checkpoints_path = os.getcwd() + "/data/checkpoints"
+        self.keras_model_save_path = os.getcwd() + '/saved_models/word_definition_model.keras'
+        self.keras_model_export_path = os.getcwd() + '/saved_models/SavedModel'
+        self.tflite_model_save_path = os.getcwd() + '/saved_models/word_definition_model.tflite'
 
         self.tfliteModel = None
         self.kerasModel = None
 
-        os.makedirs("checkpoints", exist_ok=True)
-        os.makedirs("saved_models", exist_ok=True)
-        # os.makedirs(os.path.dirname(self.keras_model_save_path), exist_ok=True)
+        os.makedirs(self.checkpoints_path, exist_ok=True)
+        os.makedirs(os.getcwd() + '/saved_models', exist_ok=True)
 
         if os.path.exists(self.keras_model_save_path):
             print("\n💽 Loading existing Keras model...\n")
@@ -117,8 +115,31 @@ class WordDefinitionModel:
 
 
 
-    
+    async def save_checkpoint(self, data: np.ndarray | list, filename: str):
+        r"""Saves data to a checkpoint file using pickle. This allows for resuming training or reusing preprocessed data without having to redo expensive computations.
+        Args:
+            data: The data to save (e.g., lists of augmented definitions, embeddings).
+            filename (str): The name of the checkpoint file (e.g., 'augmented_definitions.pkl').
+        """
+        print(f"💾 Saving checkpoint: {filename}...")
+        with open(f"{self.checkpoints_path}/{filename}", "wb") as f:
+            pickle.dump(data, f)
 
+
+    def load_checkpoint(self, filename: str) -> Any | None:
+        r"""Loads data from a checkpoint file if it exists. This is useful for resuming training or reusing preprocessed data.
+        Args:
+            filename (str): The name of the checkpoint file (e.g., 'augmented_definitions.pkl').
+        Returns:
+            The data loaded from the checkpoint file, or None if the file does not exist.
+        """
+
+        path = f"{self.checkpoints_path}/{filename}"
+        if os.path.exists(path):
+            print(f"📂 Loading checkpoint: {filename}...")
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        return None
     
 
     async def save_and_backup_model(self, model: tf.keras.Model, history: tf.keras.callbacks.History):
@@ -143,7 +164,7 @@ class WordDefinitionModel:
         self.tfliteModel = TFLiteModel(Interpreter(model_path=self.tflite_model_save_path))
 
         print(f"💾 Saving Training History...")
-        with open(f"checkpoints/training_history.pkl", "wb") as f:
+        with open(f"{self.checkpoints_path}/training_history.pkl", "wb") as f:
             pickle.dump(history.history, f)
 
 
@@ -175,72 +196,91 @@ class WordDefinitionModel:
                 # return (self.kerasModel.getKerasModel(), self.kerasModel.getHistory())
             else:
                 print("\n🥣 Preparing Training Data...\n")
+                
+                AUGMENTED_DEFINITIONS = []
+                AUGMENTED_DEFINITION_LABELS = []
+                AUGMENTED_DEFINITION_EMBEDDINGS = []
+                WORD_EMBEDDINGS = []
+                DEFINITION_EMBEDDINGS = []
+                
+                try:
+                    ad = self.load_checkpoint("augmented_definitions.pkl")
+                    if ad is not None:
+                        AUGMENTED_DEFINITIONS = ad
+                    
+                    adl = self.load_checkpoint("augmented_definition_labels.pkl")
+                    if adl is not None:
+                        AUGMENTED_DEFINITION_LABELS = adl
 
+                    ade = self.load_checkpoint("augmented_definition_embeddings.pkl")
+                    if ade is not None:
+                        AUGMENTED_DEFINITION_EMBEDDINGS = ade
+
+                    we = self.load_checkpoint("word_embeddings.pkl")
+                    if we is not None:
+                        WORD_EMBEDDINGS = we
+                    
+                    de = self.load_checkpoint("definition_embeddings.pkl")
+                    if de is not None:
+                        DEFINITION_EMBEDDINGS = de
+                    
+                except Exception as e:
+                    print(f"❌ Error occurred while loading checkpoints: {e}")
                 
 
-                augmented_definitions = utils.load_checkpoint("augmented_definitions.pkl")
-                augmented_definition_labels = utils.load_checkpoint("augmented_definition_labels.pkl")
-
-                word_embeddings = utils.load_checkpoint("word_embeddings.pkl")
-                definition_embeddings = utils.load_checkpoint("definition_embeddings.pkl")
-                augmented_definition_embeddings = utils.load_checkpoint("augmented_definition_embeddings.pkl")
-
-
-                if not augmented_definitions:
-                    augmented_definitions = []
-                    augmented_definition_labels = []
+                if len(AUGMENTED_DEFINITIONS) == 0:
                     pbar = tqdm(enumerate(self.definitions), total=len(self.definitions), ncols=self.ncols, desc="📚 Augmenting definitions")
                 
                     for i, definition in pbar:
                         chunks = self.spacy_splitter.split_definition(definition)
                         for chunk in chunks:
-                            augmented_definitions.append(chunk)
-                            augmented_definition_labels.append(i)
+                            AUGMENTED_DEFINITIONS.append(chunk)
+                            AUGMENTED_DEFINITION_LABELS.append(i)
 
-                    utils.save_checkpoint(augmented_definitions, "augmented_definitions.pkl")
-                    utils.save_checkpoint(augmented_definition_labels, "augmented_definition_labels.pkl")
+                    await self.save_checkpoint(AUGMENTED_DEFINITIONS, "augmented_definitions.pkl")
+                    await self.save_checkpoint(AUGMENTED_DEFINITION_LABELS, "augmented_definition_labels.pkl")
                 else:
                     print("\n🔄 Augmented definitions already exist. Skipping...")
 
 
-                if not isinstance(augmented_definition_embeddings, np.ndarray):
-                    augmented_defs = tqdm(range(0, len(augmented_definitions), self.batch_size), ncols=self.ncols, desc="📝 Embedding Augments    ")
+                if len(AUGMENTED_DEFINITION_EMBEDDINGS) == 0:
+                    augmented_defs = tqdm(range(0, len(AUGMENTED_DEFINITIONS), self.batch_size), ncols=self.ncols, desc="📝 Embedding Augments    ")
 
                     for i in augmented_defs:
-                        batch = augmented_definitions[i:i + self.batch_size]
+                        batch = AUGMENTED_DEFINITIONS[i:i + self.batch_size]
                         embeddings = transformer.encode(batch, convert_to_numpy=True)
-                        augmented_definition_embeddings.append(embeddings)
+                        AUGMENTED_DEFINITION_EMBEDDINGS.append(embeddings)
 
-                    augmented_definition_embeddings = np.concatenate(augmented_definition_embeddings, axis=0)
-                    utils.save_checkpoint(augmented_definition_embeddings, "augmented_definition_embeddings.pkl")
+                    AUGMENTED_DEFINITION_EMBEDDINGS = np.concatenate(AUGMENTED_DEFINITION_EMBEDDINGS, axis=0)
+                    await self.save_checkpoint(AUGMENTED_DEFINITION_EMBEDDINGS, "augmented_definition_embeddings.pkl")
                 else:
                     print("\n🔄 Augmented definition embeddings already exist. Skipping...")
 
 
-                if not isinstance(word_embeddings, np.ndarray):
+                if len(WORD_EMBEDDINGS) == 0:
                     word_defs = tqdm(range(0, len(self.words), self.batch_size), ncols=self.ncols, desc="🔤 Embedding words       ")
                 
                     for i in word_defs:
                         batch = self.words[i:i + self.batch_size]
                         embeddings = transformer.encode(batch, convert_to_numpy=True)
-                        word_embeddings.append(embeddings)
+                        WORD_EMBEDDINGS.append(embeddings)
 
-                    word_embeddings = np.concatenate(word_embeddings, axis=0)
-                    utils.save_checkpoint(word_embeddings, "word_embeddings.pkl")
+                    WORD_EMBEDDINGS = np.concatenate(WORD_EMBEDDINGS, axis=0)
+                    await self.save_checkpoint(WORD_EMBEDDINGS, "word_embeddings.pkl")
                 else:
                     print("\n🔄 Word embeddings already exist. Skipping...")
 
 
-                if not isinstance(definition_embeddings, np.ndarray):
+                if len(DEFINITION_EMBEDDINGS) == 0:
                     definition_defs = tqdm(range(0, len(self.definitions), self.batch_size), ncols=self.ncols, desc="📖 Embedding definitions ")
                 
                     for i in definition_defs:
                         batch = self.definitions[i:i + self.batch_size]
                         embeddings = transformer.encode(batch, convert_to_numpy=True)
-                        definition_embeddings.append(embeddings)
+                        DEFINITION_EMBEDDINGS.append(embeddings)
 
-                    definition_embeddings = np.concatenate(definition_embeddings, axis=0)
-                    utils.save_checkpoint(definition_embeddings, "definition_embeddings.pkl")
+                    DEFINITION_EMBEDDINGS = np.concatenate(DEFINITION_EMBEDDINGS, axis=0)
+                    await self.save_checkpoint(DEFINITION_EMBEDDINGS, "definition_embeddings.pkl")
                 else:
                     print("\n🔄 Definition embeddings already exist. Skipping...")
 
@@ -250,20 +290,20 @@ class WordDefinitionModel:
                 temp_definition_output_labels = []
                 temp_word_output_labels = []
 
-                for i in range(len(word_embeddings)):
-                    temp_inputs.append(word_embeddings[i])
+                for i in range(len(WORD_EMBEDDINGS)):
+                    temp_inputs.append(WORD_EMBEDDINGS[i])
                     temp_definition_output_labels.append(i)
                     temp_word_output_labels.append(i)
 
-                for i in range(len(definition_embeddings)):
-                    temp_inputs.append(definition_embeddings[i])
+                for i in range(len(DEFINITION_EMBEDDINGS)):
+                    temp_inputs.append(DEFINITION_EMBEDDINGS[i])
                     temp_definition_output_labels.append(i)
                     temp_word_output_labels.append(i)
 
-                for i in range(len(augmented_definition_embeddings)):
-                    temp_inputs.append(augmented_definition_embeddings[i])
-                    temp_definition_output_labels.append(augmented_definition_labels[i])
-                    temp_word_output_labels.append(augmented_definition_labels[i])
+                for i in range(len(AUGMENTED_DEFINITION_EMBEDDINGS)):
+                    temp_inputs.append(AUGMENTED_DEFINITION_EMBEDDINGS[i])
+                    temp_definition_output_labels.append(AUGMENTED_DEFINITION_LABELS[i])
+                    temp_word_output_labels.append(AUGMENTED_DEFINITION_LABELS[i])
 
                 self.inputs = np.array(temp_inputs)
                 self.definition_output_labels = np.array(temp_definition_output_labels)
@@ -273,9 +313,9 @@ class WordDefinitionModel:
 
                 print(f"\n📊 Total samples: {len(self.inputs)} 📊\n")
                 print(f"{self.inputs.shape[1]} features per sample. Preparing dataset for training...")
-                print(f"\nEmbeddings::\n Words: {len(word_embeddings)}" +
-                      f" Definitions: {len(definition_embeddings)}" + 
-                      f" Augmented Definitions: {len(augmented_definition_embeddings)})")
+                print(f"\nEmbeddings::\n Words: {len(WORD_EMBEDDINGS)}" +
+                      f" Definitions: {len(DEFINITION_EMBEDDINGS)}" + 
+                      f" Augmented Definitions: {len(AUGMENTED_DEFINITION_EMBEDDINGS)})")
                 
 
 
