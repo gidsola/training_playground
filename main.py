@@ -9,10 +9,7 @@ import asyncio
 
 from src.models.WordDefinitionModel import WordDefinitionModel
 
-wordDefinitionModel = WordDefinitionModel(
-    batch_size=512,
-    epochs=30
-)
+
 
 async def KerasModel():
     r"""Initializes and trains the Keras model if it is not already available. 
@@ -20,25 +17,32 @@ async def KerasModel():
     if not, it attempts to initialize and train the model using the WordDefinitionModel class. 
     If successful, it returns the trained Keras model; otherwise, it returns None."""
 
-    keras_model = None
-
-    if keras_model is None:
-        print("❌ Keras model not available.")
-        if await wordDefinitionModel.initializeAndTrainKerasModel():
-            if wordDefinitionModel.kerasModel is not None:
-                keras_model = wordDefinitionModel.kerasModel
-                print("✅ Keras model initialized and trained successfully.")
-                return keras_model
+    wordDefinitionModel = WordDefinitionModel(
+        batch_size=512,
+        epochs=30
+    )
+    keras_model = wordDefinitionModel.kerasModel
+    if keras_model is not None:
+        print("Keras model initialized and loaded successfully.")
+        return keras_model
+    else:
+        print("Keras model is not initialized. Running the training process...")
+        await wordDefinitionModel.initializeAndTrainKerasModel()
+        if wordDefinitionModel.kerasModel is not None:
+            print("Keras model initialized and loaded successfully after training.")
+            return wordDefinitionModel.kerasModel
         else:
-            print("❌ Failed to initialize and train the Keras model.")
+            print("Failed to initialize and train the Keras model.")
             return None
 
 
 async def main():
     kerasModel = await KerasModel()
     if kerasModel is not None:
-        predicts = kerasModel.getPredictions("It covers 71% of the Earth's surface")
-        print(f"Predictions: {predicts}")
+        predicts = kerasModel.getPredictions("tasteless liquid that is essential for all known forms of life")
+        print(f"Predicted word: {predicts[0]}, Predicted definition: {predicts[1]}")
+    else:
+        print("Keras model is not available. Cannot make predictions.")
 
 
 asyncio.run(main())

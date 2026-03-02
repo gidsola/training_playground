@@ -20,9 +20,11 @@ transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
 
 
 class KerasModel:
-    def __init__(self, model: tf.keras.Model, history: tf.keras.callbacks.History | None):
+    def __init__(self, model: tf.keras.Model, history: tf.keras.callbacks.History | None, words: list[str], definitions: list[str]):
         self.model = model
-        self.history = history 
+        self.history = history
+        self.words = words
+        self.definitions = definitions
 
     def getKerasModel(self) -> tf.keras.Model:
         return self.model
@@ -31,10 +33,12 @@ class KerasModel:
         return self.history
     
     def getPredictions(self, input: str | list[str]) -> tuple[np.ndarray, np.ndarray]:
+        if isinstance(input, str):
+            input = [input]
         embedding = transformer.encode(sentences=input, convert_to_numpy=True)
         definition_pred, word_pred = self.model.predict(embedding)
-        predictions = np.argmax(definition_pred, axis=1), np.argmax(word_pred, axis=1)
-        return predictions
+        predictions = np.argmax(definition_pred, axis=1)[0], np.argmax(word_pred, axis=1)[0]
+        return self.words[predictions[1]], self.definitions[predictions[0]]
 
 
 class TFLiteModel:
@@ -111,7 +115,7 @@ class WordDefinitionModel:
 
         if os.path.exists(self.keras_model_save_path):
             print("\n💽 Loading existing Keras model...\n")
-            self.kerasModel = KerasModel(tf.keras.models.load_model(self.keras_model_save_path), None)
+            self.kerasModel = KerasModel(tf.keras.models.load_model(self.keras_model_save_path), None, self.words, self.definitions)
 
 
 
@@ -150,7 +154,7 @@ class WordDefinitionModel:
         """
         print(f"💾 Saving model to {self.keras_model_save_path}...")
         model.save(self.keras_model_save_path)
-        self.kerasModel = KerasModel(model, history)
+        self.kerasModel = KerasModel(model, history, self.words, self.definitions)
 
         print(f"💾 Exporting model to {self.keras_model_export_path} format...")
         model.export(self.keras_model_export_path)
