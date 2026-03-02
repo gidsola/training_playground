@@ -16,7 +16,7 @@ from ai_edge_litert.interpreter import Interpreter
 from tqdm import tqdm
 
 from src.utils import utilities as utils
-from utils.SpacySplitter import SpacySplitter
+from src.utils.SpacySplitter import SpacySplitter
 
 transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
 #transformer = SentenceTransformer(model_name_or_path='all-mpnet-base-v2') # 768
@@ -100,16 +100,21 @@ class WordDefinitionModel:
         self.batch_size = batch_size
         self.ncols = 150
 
-        self.keras_model_save_path = 'saved_models/word_definition_model.keras'
-        self.keras_model_export_path = 'saved_models/SavedModel'
-        self.tflite_model_save_path='saved_models/word_definition_model.tflite'
+        self.keras_model_save_path = '../../saved_models/word_definition_model.keras'
+        self.keras_model_export_path = '../../saved_models/SavedModel'
+        self.tflite_model_save_path='../../saved_models/word_definition_model.tflite'
 
         self.tfliteModel = None
         self.kerasModel = None
 
         os.makedirs("checkpoints", exist_ok=True)
         os.makedirs("saved_models", exist_ok=True)
-        os.makedirs(os.path.dirname(self.keras_model_save_path), exist_ok=True)
+        # os.makedirs(os.path.dirname(self.keras_model_save_path), exist_ok=True)
+
+        if os.path.exists(self.keras_model_save_path):
+            print("\n💽 Loading existing Keras model...\n")
+            self.kerasModel = KerasModel(tf.keras.models.load_model(self.keras_model_save_path), None)
+
 
 
     
