@@ -7,6 +7,7 @@ import pandas as pd
 import tensorflow as tf
 import pickle
 
+from huggingface_hub import snapshot_download
 from sentence_transformers import SentenceTransformer
 from ai_edge_litert.interpreter import Interpreter
 from tqdm import tqdm
@@ -15,12 +16,22 @@ from src.utils.SpacySplitter import SpacySplitter
 
 
 class KerasModelHandler:
-    def __init__(self, model: tf.keras.Model, history: tf.keras.callbacks.History | None, words: list[str], definitions: list[str]):
+    def __init__(self, model: tf.keras.Model, history: tf.keras.callbacks.History | None, words: list[str], definitions: list[str], transformer: SentenceTransformer):
+        r"""Initializes the KerasModelHandler with the trained Keras model, its training history, and the necessary data for making predictions.
+        Args:
+            model (tf.keras.Model): The trained Keras model.
+            history (tf.keras.callbacks.History | None): The training history of the model.
+            words (list[str]): The list of words used in the model.
+            definitions (list[str]): The list of definitions used in the model.
+            transformer (SentenceTransformer): The sentence transformer for encoding input sentences.
+        """
         self.model = model
         self.history = history
         self.words = words
         self.definitions = definitions
+        self.transformer = transformer
 
+    
     def getKerasModel(self) -> tf.keras.Model:
         r"""Returns the Keras model instance for flexibility in how the model is used after it has been trained and saved.
         Returns:
@@ -28,9 +39,11 @@ class KerasModelHandler:
          """
         return self.model
 
+    
     def getHistory(self) -> tf.keras.callbacks.History | None:
         return self.history
 
+    
     def getPredictions(self, input: str | list[str]) -> dict[str, str] | None:
         r"""Generates predictions.
         Args:
@@ -42,8 +55,7 @@ class KerasModelHandler:
             input = [input]
         
         if self.model is not None:
-            transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
-            embedding = transformer.encode(sentences=input, convert_to_numpy=True)
+            embedding = self.transformer.encode(sentences=input, convert_to_numpy=True)
             definition_pred, word_pred = self.model.predict(embedding)
             predictions = np.argmax(definition_pred, axis=1)[0], np.argmax(word_pred, axis=1)[0]
             return {"Word": self.words[predictions[1]], "Definition": self.definitions[predictions[0]]}
@@ -51,6 +63,7 @@ class KerasModelHandler:
 
 class TFLiteModel:
     def __init__(self, model: Interpreter):
+        r"""Initializes the TFLiteModel with a TensorFlow Lite Interpreter instance."""
         self.model = model
 
     def getTFLiteModel(self) -> Interpreter | None:
@@ -77,22 +90,29 @@ class WordDefinitionModel:
          """
 
         print("\n⏳ Initializing Environment...\n")
+        self.all_MiniLM_L6_v2= os.getcwd() + "/src/models/all-MiniLM-L6-v2"
+
+        if not os.path.exists(self.all_MiniLM_L6_v2):
+            os.makedirs(self.all_MiniLM_L6_v2)
+            snapshot_download(repo_id="sentence-transformers/all-MiniLM-L6-v2", local_dir= self.all_MiniLM_L6_v2) 
+
+        self.NCOLS = 150
+
+        
+        self.checkpoints_path = os.getcwd() + "/data/checkpoints"
+        self.keras_model_save_path = os.getcwd() + '/saved_models/word_definition_model.keras'
+        self.keras_model_export_path = os.getcwd() + '/saved_models/SavedModel'
+        self.tflite_model_save_path = os.getcwd() + '/saved_models/word_definition_model.tflite'
+
+        self.transformer = SentenceTransformer(self.all_MiniLM_L6_v2)
+        self.tfliteModel = None
+        self.kerasModelHandler = None
 
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
             print(f"Available GPUs: {[gpu.name for gpu in gpus]}")        
         else:
             print("No GPUs found. Using CPU.")
-
-        self.NCOLS = 150
-
-        self.checkpoints_path = os.getcwd() + "/data/checkpoints"
-        self.keras_model_save_path = os.getcwd() + '/saved_models/word_definition_model.keras'
-        self.keras_model_export_path = os.getcwd() + '/saved_models/SavedModel'
-        self.tflite_model_save_path = os.getcwd() + '/saved_models/word_definition_model.tflite'
-
-        self.tfliteModel = None
-        self.kerasModelHandler = None
 
         try:
             self.getCSVData(dict)
@@ -105,7 +125,7 @@ class WordDefinitionModel:
 
         if os.path.exists(self.keras_model_save_path):
             print("\n💽 Loading existing Keras model...\n")
-            self.kerasModelHandler = KerasModelHandler(tf.keras.models.load_model(self.keras_model_save_path), None, self.words, self.definitions)
+            self.kerasModelHandler = KerasModelHandler(tf.keras.models.load_model(self.keras_model_save_path), None, self.words, self.definitions, self.transformer)
 
 
 
@@ -144,7 +164,7 @@ class WordDefinitionModel:
         """
         print(f"💾 Saving model to {self.keras_model_save_path}...")
         model.save(self.keras_model_save_path)
-        self.kerasModelHandler = KerasModelHandler(model, history, self.words, self.definitions)
+        self.kerasModelHandler = KerasModelHandler(model, history, self.words, self.definitions, self.transformer)
 
         print(f"💾 Exporting model to {self.keras_model_export_path} format...")
         model.export(self.keras_model_export_path)
@@ -225,7 +245,7 @@ class WordDefinitionModel:
                 tf.keras.backend.clear_session()
 
                 spacy_splitter = SpacySplitter()
-                transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
+                
                 
                 try:
                     ad = self.load_checkpoint("augmented_definitions.pkl")
@@ -248,7 +268,7 @@ class WordDefinitionModel:
                         await self.save_checkpoint(AUGMENTED_DEFINITIONS, "augmented_definitions.pkl")
                         await self.save_checkpoint(AUGMENTED_DEFINITION_LABELS, "augmented_definition_labels.pkl")
                     else:
-                        print("\n🔄 Augmented definitions already exist. Skipping...")
+                        print("🔄 Augmented definitions exist. Continuing...\n")
                     
 
                     ade = self.load_checkpoint("augmented_definition_embeddings.pkl")
@@ -260,13 +280,13 @@ class WordDefinitionModel:
 
                         for i in augmented_defs:
                             batch = AUGMENTED_DEFINITIONS[i:i + batch_size]
-                            embeddings = transformer.encode(batch, convert_to_numpy=True)
+                            embeddings = self.transformer.encode(batch, convert_to_numpy=True)
                             AUGMENTED_DEFINITION_EMBEDDINGS.append(embeddings)
 
                         AUGMENTED_DEFINITION_EMBEDDINGS = np.concatenate(AUGMENTED_DEFINITION_EMBEDDINGS, axis=0)
                         await self.save_checkpoint(AUGMENTED_DEFINITION_EMBEDDINGS, "augmented_definition_embeddings.pkl")
                     else:
-                        print("\n🔄 Augmented definition embeddings already exist. Skipping...")
+                        print("🔄 Augmented definition embeddings exist. Continuing...\n")
 
 
                     we = self.load_checkpoint("word_embeddings.pkl")
@@ -278,13 +298,13 @@ class WordDefinitionModel:
 
                         for i in word_defs:
                             batch = self.words[i:i + batch_size]
-                            embeddings = transformer.encode(batch, convert_to_numpy=True)
+                            embeddings = self.transformer.encode(batch, convert_to_numpy=True)
                             WORD_EMBEDDINGS.append(embeddings)
 
                         WORD_EMBEDDINGS = np.concatenate(WORD_EMBEDDINGS, axis=0)
                         await self.save_checkpoint(WORD_EMBEDDINGS, "word_embeddings.pkl")
                     else:
-                        print("\n🔄 Word embeddings already exist. Skipping...")
+                        print("🔄 Word embeddings exist. Continuing...\n")
                     
                     
                     de = self.load_checkpoint("definition_embeddings.pkl")
@@ -296,13 +316,13 @@ class WordDefinitionModel:
 
                         for i in definition_defs:
                             batch = self.definitions[i:i + batch_size]
-                            embeddings = transformer.encode(batch, convert_to_numpy=True)
+                            embeddings = self.transformer.encode(batch, convert_to_numpy=True)
                             DEFINITION_EMBEDDINGS.append(embeddings)
 
                         DEFINITION_EMBEDDINGS = np.concatenate(DEFINITION_EMBEDDINGS, axis=0)
                         await self.save_checkpoint(DEFINITION_EMBEDDINGS, "definition_embeddings.pkl")
                     else:
-                        print("\n🔄 Definition embeddings already exist. Skipping...")
+                        print("🔄 Definition embeddings exist. Continuing...\n")
                     
                 except Exception as e:
                     print(f"❌ Error occurred while loading checkpoints: {e}")
@@ -334,11 +354,11 @@ class WordDefinitionModel:
 
 
 
-                print(f"\n📊 Total samples: {len(self.inputs)} 📊\n")
+                print(f"\n📊 Total samples: {len(self.inputs)} 📊")
                 print(f"{self.inputs.shape[1]} features per sample. Preparing dataset for training...")
                 print(f"\nEmbeddings::\n Words: {len(WORD_EMBEDDINGS)}" +
                       f" Definitions: {len(DEFINITION_EMBEDDINGS)}" + 
-                      f" Augmented Definitions: {len(AUGMENTED_DEFINITION_EMBEDDINGS)})")
+                      f" Augmented Definitions: {len(AUGMENTED_DEFINITION_EMBEDDINGS)})\n")
                 
 
 
@@ -398,7 +418,7 @@ class WordDefinitionModel:
                 #     )
                 # ]
 
-                print("🧬 Begininning model fit...", flush=True)
+                print("\n🧬 Begininning model fit...", flush=True)
                 history = model.fit(
                     dataset,
                     # callbacks=callbacks

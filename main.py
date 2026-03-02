@@ -27,7 +27,8 @@ async def main():
             print(f"Weight name: {weight.name}, Weight shape: {weight.shape}")
         print()
     else:
-        print("Keras model is not available. Cannot make predictions.")
+        print("Keras model not found... Training model for use...")
+        await wordDefinitionModel.createKerasModel()
 
 
 asyncio.run(main())
