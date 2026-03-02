@@ -14,21 +14,31 @@ wordDefinitionModel = WordDefinitionModel(
     epochs=30
 )
 
-async def prediction_Keras(input: str):
-    r"""Generates a prediction using the Keras model for a given input string. The function determines whether to predict a word or a definition based on the input length.
-    Args:
-        input (str): The input string for which to generate a prediction.
-    Returns:
-        str: The predicted word or definition.
-    """
+async def KerasModel():
+    r"""Initializes and trains the Keras model if it is not already available. 
+    This function checks if the Keras model is already initialized; 
+    if not, it attempts to initialize and train the model using the WordDefinitionModel class. 
+    If successful, it returns the trained Keras model; otherwise, it returns None."""
 
-    keras_model = wordDefinitionModel.kerasModel
+    keras_model = None
 
     if keras_model is None:
         print("❌ Keras model not available.")
-        await wordDefinitionModel.initializeAndTrainKerasModel()
-        print("✅ Keras model is ready for predictions.")
+        if await wordDefinitionModel.initializeAndTrainKerasModel():
+            if wordDefinitionModel.kerasModel is not None:
+                keras_model = wordDefinitionModel.kerasModel
+                print("✅ Keras model initialized and trained successfully.")
+                return keras_model
+        else:
+            print("❌ Failed to initialize and train the Keras model.")
+            return None
 
 
-predicts = prediction_Keras("liquid covering most of the earths surface")
-print(f"Predictions: {predicts}")
+async def main():
+    kerasModel = await KerasModel()
+    if kerasModel is not None:
+        predicts = kerasModel.getPredictions("It covers 71% of the Earth's surface")
+        print(f"Predictions: {predicts}")
+
+
+asyncio.run(main())
