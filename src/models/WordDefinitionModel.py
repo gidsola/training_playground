@@ -51,8 +51,8 @@ class TFLiteModel:
 
 class WordDefinitionModel:
     
-    epochs: int
-    batch_size: int
+    EPOCHS: int
+    BATCH_SIZE: int
 
     inputs: np.ndarray
     definition_output_labels: np.ndarray
@@ -80,10 +80,6 @@ class WordDefinitionModel:
         else:
             print("No GPUs found. Using CPU.")
 
-        tf.keras.backend.clear_session()
-
-        
-
         if dict == "default":
             print("⚠️  Using default dictionary. To use a custom dictionary, provide the path to a CSV file with 'word' and 'definition' columns when initializing the model.")
             df =pd.read_csv(os.getcwd() + '/data/datasets/default/default.csv')
@@ -98,9 +94,9 @@ class WordDefinitionModel:
 
         print(f"\n🔋 Loaded {len(self.words)} words with definitions.")
 
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.ncols = 150
+        self.EPOCHS = epochs
+        self.BATCH_SIZE = batch_size
+        self.NCOLS = 150
 
         self.checkpoints_path = os.getcwd() + "/data/checkpoints"
         self.keras_model_save_path = os.getcwd() + '/saved_models/word_definition_model.keras'
@@ -179,8 +175,8 @@ class WordDefinitionModel:
         """
         indices = np.arange(len(self.inputs))
         np.random.shuffle(indices)
-        for i in range(0, len(indices), self.batch_size):
-            batch_indices = indices[i:i + self.batch_size]
+        for i in range(0, len(indices), self.BATCH_SIZE):
+            batch_indices = indices[i:i + self.BATCH_SIZE]
             x_batch = self.inputs[batch_indices]
             y_batch = {
                 'definition_output': self.definition_output_labels[batch_indices],
@@ -192,13 +188,7 @@ class WordDefinitionModel:
     async def initializeAndTrainKerasModel(self) -> None:   #tuple[tf.keras.Model, tf.keras.callbacks.History | None] | None:
         r"""Initializes the Keras model by preparing the training data, defining the model architecture, compiling it, and starting the training process. It also handles saving the trained model and its history for later use."""
         try:
-            # if os.path.exists(self.keras_model_export_path):
-            #     print("\n💽 Loading existing model...\n")
-            #     return (tf.keras.models.load_model(self.keras_model_save_path), None)
-            if self.kerasModel is not None:
-                print("\n💽 Keras model already initialized. Access it via the 'kerasModel' attribute.\n")
-                # return (self.kerasModel.getKerasModel(), self.kerasModel.getHistory())
-            else:
+            if self.kerasModel is None:
                 print("\n🥣 Preparing Training Data...\n")
                 
                 AUGMENTED_DEFINITIONS = []
@@ -207,89 +197,89 @@ class WordDefinitionModel:
                 WORD_EMBEDDINGS = []
                 DEFINITION_EMBEDDINGS = []
                 
+                tf.keras.backend.clear_session()
+                
                 try:
                     ad = self.load_checkpoint("augmented_definitions.pkl")
                     if ad is not None:
                         AUGMENTED_DEFINITIONS = ad
-                    
                     adl = self.load_checkpoint("augmented_definition_labels.pkl")
                     if adl is not None:
                         AUGMENTED_DEFINITION_LABELS = adl
+
+                    if len(AUGMENTED_DEFINITIONS) == 0:
+                        pbar = tqdm(enumerate(self.definitions), total=len(self.definitions), ncols=self.NCOLS, desc="📚 Augmenting definitions")
+                
+                        for i, definition in pbar:
+                            chunks = self.spacy_splitter.split_definition(definition)
+                            for chunk in chunks:
+                                AUGMENTED_DEFINITIONS.append(chunk)
+                                AUGMENTED_DEFINITION_LABELS.append(i)
+
+                        await self.save_checkpoint(AUGMENTED_DEFINITIONS, "augmented_definitions.pkl")
+                        await self.save_checkpoint(AUGMENTED_DEFINITION_LABELS, "augmented_definition_labels.pkl")
+                    else:
+                        print("\n🔄 Augmented definitions already exist. Skipping...")
+                    
 
                     ade = self.load_checkpoint("augmented_definition_embeddings.pkl")
                     if ade is not None:
                         AUGMENTED_DEFINITION_EMBEDDINGS = ade
 
+                    if len(AUGMENTED_DEFINITION_EMBEDDINGS) == 0:
+                        augmented_defs = tqdm(range(0, len(AUGMENTED_DEFINITIONS), self.BATCH_SIZE), ncols=self.NCOLS, desc="📝 Embedding Augments    ")
+
+                        for i in augmented_defs:
+                            batch = AUGMENTED_DEFINITIONS[i:i + self.BATCH_SIZE]
+                            embeddings = transformer.encode(batch, convert_to_numpy=True)
+                            AUGMENTED_DEFINITION_EMBEDDINGS.append(embeddings)
+
+                        AUGMENTED_DEFINITION_EMBEDDINGS = np.concatenate(AUGMENTED_DEFINITION_EMBEDDINGS, axis=0)
+                        await self.save_checkpoint(AUGMENTED_DEFINITION_EMBEDDINGS, "augmented_definition_embeddings.pkl")
+                    else:
+                        print("\n🔄 Augmented definition embeddings already exist. Skipping...")
+
+
                     we = self.load_checkpoint("word_embeddings.pkl")
                     if we is not None:
                         WORD_EMBEDDINGS = we
+
+                    if len(WORD_EMBEDDINGS) == 0:
+                        word_defs = tqdm(range(0, len(self.words), self.BATCH_SIZE), ncols=self.NCOLS, desc="🔤 Embedding words       ")
+
+                        for i in word_defs:
+                            batch = self.words[i:i + self.BATCH_SIZE]
+                            embeddings = transformer.encode(batch, convert_to_numpy=True)
+                            WORD_EMBEDDINGS.append(embeddings)
+
+                        WORD_EMBEDDINGS = np.concatenate(WORD_EMBEDDINGS, axis=0)
+                        await self.save_checkpoint(WORD_EMBEDDINGS, "word_embeddings.pkl")
+                    else:
+                        print("\n🔄 Word embeddings already exist. Skipping...")
+                    
                     
                     de = self.load_checkpoint("definition_embeddings.pkl")
                     if de is not None:
                         DEFINITION_EMBEDDINGS = de
+
+                    if len(DEFINITION_EMBEDDINGS) == 0:
+                        definition_defs = tqdm(range(0, len(self.definitions), self.BATCH_SIZE), ncols=self.NCOLS, desc="📖 Embedding definitions ")
+
+                        for i in definition_defs:
+                            batch = self.definitions[i:i + self.BATCH_SIZE]
+                            embeddings = transformer.encode(batch, convert_to_numpy=True)
+                            DEFINITION_EMBEDDINGS.append(embeddings)
+
+                        DEFINITION_EMBEDDINGS = np.concatenate(DEFINITION_EMBEDDINGS, axis=0)
+                        await self.save_checkpoint(DEFINITION_EMBEDDINGS, "definition_embeddings.pkl")
+                    else:
+                        print("\n🔄 Definition embeddings already exist. Skipping...")
                     
                 except Exception as e:
                     print(f"❌ Error occurred while loading checkpoints: {e}")
                 
 
-                if len(AUGMENTED_DEFINITIONS) == 0:
-                    pbar = tqdm(enumerate(self.definitions), total=len(self.definitions), ncols=self.ncols, desc="📚 Augmenting definitions")
                 
-                    for i, definition in pbar:
-                        chunks = self.spacy_splitter.split_definition(definition)
-                        for chunk in chunks:
-                            AUGMENTED_DEFINITIONS.append(chunk)
-                            AUGMENTED_DEFINITION_LABELS.append(i)
-
-                    await self.save_checkpoint(AUGMENTED_DEFINITIONS, "augmented_definitions.pkl")
-                    await self.save_checkpoint(AUGMENTED_DEFINITION_LABELS, "augmented_definition_labels.pkl")
-                else:
-                    print("\n🔄 Augmented definitions already exist. Skipping...")
-
-
-                if len(AUGMENTED_DEFINITION_EMBEDDINGS) == 0:
-                    augmented_defs = tqdm(range(0, len(AUGMENTED_DEFINITIONS), self.batch_size), ncols=self.ncols, desc="📝 Embedding Augments    ")
-
-                    for i in augmented_defs:
-                        batch = AUGMENTED_DEFINITIONS[i:i + self.batch_size]
-                        embeddings = transformer.encode(batch, convert_to_numpy=True)
-                        AUGMENTED_DEFINITION_EMBEDDINGS.append(embeddings)
-
-                    AUGMENTED_DEFINITION_EMBEDDINGS = np.concatenate(AUGMENTED_DEFINITION_EMBEDDINGS, axis=0)
-                    await self.save_checkpoint(AUGMENTED_DEFINITION_EMBEDDINGS, "augmented_definition_embeddings.pkl")
-                else:
-                    print("\n🔄 Augmented definition embeddings already exist. Skipping...")
-
-
-                if len(WORD_EMBEDDINGS) == 0:
-                    word_defs = tqdm(range(0, len(self.words), self.batch_size), ncols=self.ncols, desc="🔤 Embedding words       ")
-                
-                    for i in word_defs:
-                        batch = self.words[i:i + self.batch_size]
-                        embeddings = transformer.encode(batch, convert_to_numpy=True)
-                        WORD_EMBEDDINGS.append(embeddings)
-
-                    WORD_EMBEDDINGS = np.concatenate(WORD_EMBEDDINGS, axis=0)
-                    await self.save_checkpoint(WORD_EMBEDDINGS, "word_embeddings.pkl")
-                else:
-                    print("\n🔄 Word embeddings already exist. Skipping...")
-
-
-                if len(DEFINITION_EMBEDDINGS) == 0:
-                    definition_defs = tqdm(range(0, len(self.definitions), self.batch_size), ncols=self.ncols, desc="📖 Embedding definitions ")
-                
-                    for i in definition_defs:
-                        batch = self.definitions[i:i + self.batch_size]
-                        embeddings = transformer.encode(batch, convert_to_numpy=True)
-                        DEFINITION_EMBEDDINGS.append(embeddings)
-
-                    DEFINITION_EMBEDDINGS = np.concatenate(DEFINITION_EMBEDDINGS, axis=0)
-                    await self.save_checkpoint(DEFINITION_EMBEDDINGS, "definition_embeddings.pkl")
-                else:
-                    print("\n🔄 Definition embeddings already exist. Skipping...")
-
-
-
                 temp_inputs = []
                 temp_definition_output_labels = []
                 temp_word_output_labels = []
@@ -383,16 +373,15 @@ class WordDefinitionModel:
                 history = model.fit(
                     dataset,
                     # callbacks=callbacks
-                    epochs=self.epochs,
-                    steps_per_epoch = (len(self.inputs) + self.batch_size - 1) // self.batch_size,
+                    epochs=self.EPOCHS,
+                    steps_per_epoch = (len(self.inputs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE,
                     validation_data=dataset,
-                    validation_steps=(len(self.inputs) + self.batch_size - 1) // self.batch_size
+                    validation_steps=(len(self.inputs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
                 
                     # verbose=1
                 )
-        
                 await self.save_and_backup_model(model, history)
-                # return (model, history)
+                
         except Exception as e:
                 print(f"❌ Error during data preparation: {e}")
                 return None
