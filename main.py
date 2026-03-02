@@ -30,5 +30,5 @@ async def prediction_Keras(input: str):
         print("✅ Keras model is ready for predictions.")
 
 
-predicts = asyncio.run(prediction_Keras("liquid covering most of the earths surface"))
+predicts = prediction_Keras("liquid covering most of the earths surface")
 print(f"Predictions: {predicts}")
