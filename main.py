@@ -11,10 +11,8 @@ from src.models.WordDefinitionModel import WordDefinitionModel
 
 
 async def main():
-    wordDefinitionModel = WordDefinitionModel(
-        batch_size=512,
-        epochs=30
-    )
+    wordDefinitionModel = WordDefinitionModel()
+    
     if wordDefinitionModel.kerasModelHandler is not None:
         kerasHandler = wordDefinitionModel.kerasModelHandler
         kerasModel = kerasHandler.getKerasModel() # model direct

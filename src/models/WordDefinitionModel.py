@@ -5,18 +5,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-
 import pickle
 
 from sentence_transformers import SentenceTransformer
 from ai_edge_litert.interpreter import Interpreter
 from tqdm import tqdm
 
-# from src.utils import utilities as utils
 from src.utils.SpacySplitter import SpacySplitter
-
-# transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
-#transformer = SentenceTransformer(model_name_or_path='all-mpnet-base-v2') # 768
 
 
 class KerasModelHandler:
@@ -63,9 +58,6 @@ class TFLiteModel:
     
 
 class WordDefinitionModel:
-    
-    EPOCHS: int
-    BATCH_SIZE: int
 
     words: list[str]
     definitions: list[str]
@@ -77,16 +69,12 @@ class WordDefinitionModel:
     tfliteModel: TFLiteModel | None = None
     kerasModelHandler: KerasModelHandler | None = None
     
-    spacy_splitter: SpacySplitter = SpacySplitter()
 
-
-    def __init__(self, batch_size: int = 32, epochs: int = 10, dict = 'default'):
-        r"""Initializes the WordDefinitionModel by loading the dataset, preparing the training data, and setting up paths for saving models and checkpoints. It also checks for available GPUs and clears any existing TensorFlow sessions to ensure a clean start.
+    def __init__(self, dict = 'default'):
+        r"""Initializes the WordDefinitionModel.
         Args:
-            batch_size (int): The number of samples per batch during training. Default is 32.
-            epochs (int): The number of epochs to train the model. Default is 10.
-            dict (str): The path to the CSV file containing words and their definitions or a named built-in dictionary. The CSV file should have 'word' and 'definition' columns. If no dictionary is provided, it will load a default dictionary from 'data/dictionaries/dict.csv'.
-        """
+            dict (str): The path to the CSV file containing the dictionary data, or 'default' to use the default dataset.
+         """
 
         print("\n⏳ Initializing Environment...\n")
 
@@ -96,8 +84,6 @@ class WordDefinitionModel:
         else:
             print("No GPUs found. Using CPU.")
 
-        self.EPOCHS = epochs
-        self.BATCH_SIZE = batch_size
         self.NCOLS = 150
 
         self.checkpoints_path = os.getcwd() + "/data/checkpoints"
@@ -108,7 +94,6 @@ class WordDefinitionModel:
         self.tfliteModel = None
         self.kerasModelHandler = None
 
-        # self.dict = dict
         try:
             self.getCSVData(dict)
         except Exception as e:
@@ -177,15 +162,17 @@ class WordDefinitionModel:
             pickle.dump(history.history, f)
 
 
-    def data_generator(self):
-        r"""A generator function that yields batches of training data for the Keras model. It iterates through the combined dataset of word embeddings, definition embeddings, and augmented definition embeddings, yielding batches of inputs and their corresponding labels for both definition and word outputs.
+    def data_generator(self, batch_size: int = 512):
+        r"""A generator function that yields batches of training data for the Keras model.
+        Args:
+            batch_size (int): The number of samples per batch. Default is 512.
         Yields:
             tuple: A tuple containing a batch of inputs and a dictionary of corresponding labels for definition and word outputs.
         """
         indices = np.arange(len(self.inputs))
         np.random.shuffle(indices)
-        for i in range(0, len(indices), self.BATCH_SIZE):
-            batch_indices = indices[i:i + self.BATCH_SIZE]
+        for i in range(0, len(indices), batch_size):
+            batch_indices = indices[i:i + batch_size]
             x_batch = self.inputs[batch_indices]
             y_batch = {
                 'definition_output': self.definition_output_labels[batch_indices],
@@ -223,8 +210,8 @@ class WordDefinitionModel:
             raise
 
 
-    async def createKerasModel(self) -> None:   #tuple[tf.keras.Model, tf.keras.callbacks.History | None] | None:
-        r"""Initializes the Keras model by preparing the training data, defining the model architecture, compiling it, and starting the training process. It also handles saving the trained model and its history for later use."""
+    async def createKerasModel(self, batch_size: int = 512, epochs: int = 30) -> None:   #tuple[tf.keras.Model, tf.keras.callbacks.History | None] | None:
+        r"""Creates a Keras model via training. """
         try:
             if self.kerasModelHandler is None:
                 print("\n🥣 Preparing Training Data...\n")
@@ -236,8 +223,10 @@ class WordDefinitionModel:
                 DEFINITION_EMBEDDINGS = []
                 
                 tf.keras.backend.clear_session()
-                transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
 
+                spacy_splitter = SpacySplitter()
+                transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
+                
                 try:
                     ad = self.load_checkpoint("augmented_definitions.pkl")
                     if ad is not None:
@@ -248,9 +237,10 @@ class WordDefinitionModel:
 
                     if len(AUGMENTED_DEFINITIONS) == 0:
                         pbar = tqdm(enumerate(self.definitions), total=len(self.definitions), ncols=self.NCOLS, desc="📚 Augmenting definitions")
-                
+                        
+                        
                         for i, definition in pbar:
-                            chunks = self.spacy_splitter.split_definition(definition)
+                            chunks = spacy_splitter.split_definition(definition)
                             for chunk in chunks:
                                 AUGMENTED_DEFINITIONS.append(chunk)
                                 AUGMENTED_DEFINITION_LABELS.append(i)
@@ -266,10 +256,10 @@ class WordDefinitionModel:
                         AUGMENTED_DEFINITION_EMBEDDINGS = ade
 
                     if len(AUGMENTED_DEFINITION_EMBEDDINGS) == 0:
-                        augmented_defs = tqdm(range(0, len(AUGMENTED_DEFINITIONS), self.BATCH_SIZE), ncols=self.NCOLS, desc="📝 Embedding Augments    ")
+                        augmented_defs = tqdm(range(0, len(AUGMENTED_DEFINITIONS), batch_size), ncols=self.NCOLS, desc="📝 Embedding Augments    ")
 
                         for i in augmented_defs:
-                            batch = AUGMENTED_DEFINITIONS[i:i + self.BATCH_SIZE]
+                            batch = AUGMENTED_DEFINITIONS[i:i + batch_size]
                             embeddings = transformer.encode(batch, convert_to_numpy=True)
                             AUGMENTED_DEFINITION_EMBEDDINGS.append(embeddings)
 
@@ -284,10 +274,10 @@ class WordDefinitionModel:
                         WORD_EMBEDDINGS = we
 
                     if len(WORD_EMBEDDINGS) == 0:
-                        word_defs = tqdm(range(0, len(self.words), self.BATCH_SIZE), ncols=self.NCOLS, desc="🔤 Embedding words       ")
+                        word_defs = tqdm(range(0, len(self.words), batch_size), ncols=self.NCOLS, desc="🔤 Embedding words       ")
 
                         for i in word_defs:
-                            batch = self.words[i:i + self.BATCH_SIZE]
+                            batch = self.words[i:i + batch_size]
                             embeddings = transformer.encode(batch, convert_to_numpy=True)
                             WORD_EMBEDDINGS.append(embeddings)
 
@@ -302,10 +292,10 @@ class WordDefinitionModel:
                         DEFINITION_EMBEDDINGS = de
 
                     if len(DEFINITION_EMBEDDINGS) == 0:
-                        definition_defs = tqdm(range(0, len(self.definitions), self.BATCH_SIZE), ncols=self.NCOLS, desc="📖 Embedding definitions ")
+                        definition_defs = tqdm(range(0, len(self.definitions), batch_size), ncols=self.NCOLS, desc="📖 Embedding definitions ")
 
                         for i in definition_defs:
-                            batch = self.definitions[i:i + self.BATCH_SIZE]
+                            batch = self.definitions[i:i + batch_size]
                             embeddings = transformer.encode(batch, convert_to_numpy=True)
                             DEFINITION_EMBEDDINGS.append(embeddings)
 
@@ -412,27 +402,16 @@ class WordDefinitionModel:
                 history = model.fit(
                     dataset,
                     # callbacks=callbacks
-                    epochs=self.EPOCHS,
-                    steps_per_epoch = (len(self.inputs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE,
+                    epochs=epochs,
+                    steps_per_epoch = (len(self.inputs) + batch_size - 1) // batch_size,
                     validation_data=dataset,
-                    validation_steps=(len(self.inputs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+                    validation_steps=(len(self.inputs) + batch_size - 1) // batch_size
                 
                     # verbose=1
                 )
                 await self.save_and_backup_model(model, history)
-                
+            else:
+                print("Keras model already exists. Skipping training...")
         except Exception as e:
                 print(f"❌ Error during data preparation: {e}")
                 return None
-
-
-    # def getPredictions(self, input: str | list[str]) -> list[str] | None:
-    #     if isinstance(input, str):
-    #         input = [input]
-        
-    #     if self.kerasModel is not None:
-    #         transformer = SentenceTransformer(model_name_or_path='all-MiniLM-L6-v2')
-    #         embedding = transformer.encode(sentences=input, convert_to_numpy=True)
-    #         definition_pred, word_pred = self.kerasModel.model.predict(embedding)
-    #         predictions = np.argmax(definition_pred, axis=1)[0], np.argmax(word_pred, axis=1)[0]
-    #         return [self.words[predictions[1]], self.definitions[predictions[0]]]
