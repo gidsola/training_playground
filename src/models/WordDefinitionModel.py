@@ -1,6 +1,7 @@
 
 import os
 from typing import Any
+from xml.parsers.expat import model
 
 import numpy as np
 import pandas as pd
@@ -246,7 +247,6 @@ class WordDefinitionModel:
 
                 spacy_splitter = SpacySplitter()
                 
-                
                 try:
                     ad = self.load_checkpoint("augmented_definitions.pkl")
                     if ad is not None:
@@ -257,7 +257,6 @@ class WordDefinitionModel:
 
                     if len(AUGMENTED_DEFINITIONS) == 0:
                         pbar = tqdm(enumerate(self.definitions), total=len(self.definitions), ncols=self.NCOLS, desc="📚 Augmenting definitions")
-                        
                         
                         for i, definition in pbar:
                             chunks = spacy_splitter.split_definition(definition)
@@ -352,6 +351,8 @@ class WordDefinitionModel:
                 self.definition_output_labels = np.array(temp_definition_output_labels)
                 self.word_output_labels = np.array(temp_word_output_labels)
 
+                steps_per_epoch = (len(self.inputs) + batch_size - 1) // batch_size
+
 
 
                 print(f"\n📊 Total samples: {len(self.inputs)} 📊")
@@ -364,10 +365,11 @@ class WordDefinitionModel:
 
                 input_layer = tf.keras.layers.Input(shape=(self.inputs.shape[1],), dtype=tf.float32)
 
-                x = tf.keras.layers.Dense(512, activation='relu')(input_layer)
+                x = tf.keras.layers.Dense(1024, activation='relu')(input_layer)
+                # x = tf.keras.layers.BatchNormalization()(x)
+                x = tf.keras.layers.Dense(512, activation='relu')(x)
                 # x = tf.keras.layers.BatchNormalization()(x)
                 x = tf.keras.layers.Dense(256, activation='relu')(x)
-                # x = tf.keras.layers.BatchNormalization()(x)
                 # x = tf.keras.layers.Dropout(0.3)(x)
 
                 definition_output = tf.keras.layers.Dense(len(self.definitions), activation='softmax', name='definition_output')(x)
@@ -378,7 +380,7 @@ class WordDefinitionModel:
                     decay_steps=10000,
                     decay_rate=0.9
                 )
-
+                
                 model = tf.keras.models.Model(inputs=input_layer, outputs=[definition_output, word_output])
 
                 model.compile(
@@ -407,27 +409,56 @@ class WordDefinitionModel:
 
             
 
-                # callbacks = [
-                #     tf.keras.callbacks.EarlyStopping(patience=3, restore_best_weights=True),
-                #     tf.keras.callbacks.ModelCheckpoint(
-                #         filepath=keras_model_save_path,
-                #         save_best_only=True, # untill validation is setuup
-                #         save_weights_only=False,
-                #         mode='auto',
-                #         verbose=1
-                #     )
-                # ]
+                
+                class TqdmCallback(tf.keras.callbacks.Callback):
+                    loss_color = "\033[31m"
+                    acc_color = "\033[32m"
+                    reset_color = "\033[0m"
+                    
+                    def __init__(self, steps_per_epoch, ncols=50):
+                        super().__init__()
+                        self.steps_per_epoch = steps_per_epoch
+                        self.ncols = ncols
+                        self.pbar = None
 
-                print("\n🧬 Begininning model fit...", flush=True)
+                    def on_train_begin(self, logs=None):
+                        print("\n🧬 Beginning model fit...\n")
+
+                    def on_epoch_begin(self, epoch, logs=None):
+                        self.pbar = tqdm(
+                            total=self.steps_per_epoch,
+                            desc=f" 🧬 Epoch {epoch + 1}/{self.params['epochs']}",
+                            ncols=self.ncols,
+                            # bar_format='{l_bar}{bar:50}{r_bar}{bar:-50b}',
+                            bar_format='\033[36m{l_bar}\033[0m{bar:50}\033[36m{r_bar}\033[0m',
+                            colour='green',
+                            dynamic_ncols=True,
+                            ascii="    •    •    •"
+                        )
+
+                    def on_train_batch_end(self, batch, logs=None):
+                        if self.pbar is not None:
+                            self.pbar.refresh()
+                            self.pbar.update(1)
+                            if logs is not None:
+                                
+                                self.pbar.set_postfix({
+                                    '\033[36mloss': f"{self.loss_color}{logs.get('loss', 0):.4f}{self.reset_color}",
+                                    '\033[36mdef_acc': f"{self.acc_color}{logs.get('definition_output_accuracy', 0):.4f}{self.reset_color}",
+                                    '\033[36mword_acc': f"{self.acc_color}{logs.get('word_output_accuracy', 0):.4f}{self.reset_color}"
+                                })
+
+                    def on_epoch_end(self, epoch, logs=None):
+                        if self.pbar is not None:
+                            self.pbar.close()
+                
+
                 history = model.fit(
                     dataset,
-                    # callbacks=callbacks
+                    callbacks=[TqdmCallback(steps_per_epoch, ncols=self.NCOLS)],
                     epochs=epochs,
-                    steps_per_epoch = (len(self.inputs) + batch_size - 1) // batch_size,
-                    validation_data=dataset,
-                    validation_steps=(len(self.inputs) + batch_size - 1) // batch_size
-                
-                    # verbose=1
+                    steps_per_epoch=steps_per_epoch,
+                    verbose=0
                 )
                 await self.save_and_backup_model(model, history)
             else:

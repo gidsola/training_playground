@@ -39,6 +39,12 @@ training_playground/
 - **Jupyter Notebooks**
 - **Git for version control**
 
+## 🙏 Credits
+
+- **sentence-transformers/all-MiniLM-L6-v2** - [Hugging Face Model Card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+- **spaCy** - Industrial-strength NLP library
+
+
 ## 📖 Contributing
 
 Feel free to experiment, break things, and learn. That's what playgrounds are for!
