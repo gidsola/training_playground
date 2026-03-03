@@ -365,12 +365,21 @@ class WordDefinitionModel:
 
                 input_layer = tf.keras.layers.Input(shape=(self.inputs.shape[1],), dtype=tf.float32)
 
-                x = tf.keras.layers.Dense(1024, activation='relu')(input_layer)
-                # x = tf.keras.layers.BatchNormalization()(x)
+                x = tf.keras.layers.Dense(2048, activation='relu')(input_layer)
+                x = tf.keras.layers.BatchNormalization()(x)
+                x = tf.keras.layers.Dropout(0.3)(x)
+
+                x = tf.keras.layers.Dense(1024, activation='relu')(x)
+                x = tf.keras.layers.BatchNormalization()(x)
+                x = tf.keras.layers.Dropout(0.3)(x)
+
                 x = tf.keras.layers.Dense(512, activation='relu')(x)
-                # x = tf.keras.layers.BatchNormalization()(x)
+                x = tf.keras.layers.BatchNormalization()(x)
+                x = tf.keras.layers.Dropout(0.3)(x)
+                
                 x = tf.keras.layers.Dense(256, activation='relu')(x)
-                # x = tf.keras.layers.Dropout(0.3)(x)
+                x = tf.keras.layers.BatchNormalization()(x)
+                x = tf.keras.layers.Dropout(0.3)(x)
 
                 definition_output = tf.keras.layers.Dense(len(self.definitions), activation='softmax', name='definition_output')(x)
                 word_output = tf.keras.layers.Dense(len(self.words), activation='softmax', name='word_output')(x)
